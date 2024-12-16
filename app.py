@@ -204,8 +204,14 @@ Your response MUST be in this exact JSON format:
 def main():
     st.set_page_config(page_title="CPP Europe Item Name Standardization", layout="wide")
     
-    st.title("CPP Europe Item Name Standardization")
-    st.write("AI based matching algorithm based on a predefined Master List")
+    st.markdown('<h1 class="main-header">AI Engine for Item Standardization</h1>', unsafe_allow_html=True)
+    st.markdown("""
+        <p class="sub-header">
+        Base Input is a curated master list that our LLM is trained on. 
+        User inputs sample data from transactions (name, type, category) and output is a suggested name 
+        for each row with confidence level and reasoning.
+        </p>
+        """, unsafe_allow_html=True)
     
     # Load master list from hardcoded string
     master_df = pd.read_csv(StringIO(MASTER_LIST))  # Fixed StringIO import
@@ -218,7 +224,7 @@ def main():
     st.write("Enter items to standardize (CSV format: Item Name, Item Type, Item Category)")
     sample_text = st.text_area(
         "Paste sample data",
-        "C.E Ferulic serum,Product,Antioxidants\nC.E. Ferulic 30ml,Product,Skincare\nC+E Fer,Product,Face Serums\nPhloretin,Product,Face Products\nPhloretin CF (30ml),Product,Face Serum\nPhlorentin CF serum,Product,Anti-aging\nH.A. Intensifier,Product,Serums\nHA Int,Product,Face Treatment\nTriple Lipid,Product,Moisturizer\nTriple lipid restore,Product,Face Cream\nTLR 242,Product,Moisturizers\nAGE eye,Product,Eye Products\nAGE Eye Complex,Product,Eye Care\nA.G.E. Eye,Product,Eye Treatment\nAge eye cream,Product,Eye Products\nDiscoloration defence,Product,Treatment\nDisc Defense serum,Product,Pigmentation\nGentle Clean,Product,Face Wash\nGentle Cleanser (200ml),Product,Cleanser\ngentle cleanser,Product,Cleansers\nB5 Gel,Product,Hydratio",
+        "C+E Fer,Product,Face Serums\nPhloretin CF (30ml),Product,Face Serum\nHA Int,Product,Face Treatment\nTriple lipid restore,Product,Face Cream\nTLR 242,Product,Moisturizers\nAGE eye,Product,Eye Products\nDisc Defense serum,Product,Pigmentation\nGentle Clean,Product,Face Wash",
         height=100
     )
     
