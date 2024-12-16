@@ -108,64 +108,46 @@ Hair Growth Serum,Retail Products,Product
 Brightening Cream,Retail Products,Product"""
 
 
-
 class LLMItemMapper:
     def __init__(self, master_df: pd.DataFrame):
-        api_key = check_api_key()
         self.master_df = master_df
-        self.client = OpenAI(api_key=api_key)
+        self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         self.mapping_cache = {}
         
     def create_system_prompt(self) -> str:
-        categories = self.master_df['Item Category'].unique().tolist()  # Fixed column name
-        #brands = self.master_df['Brand'].unique().tolist()
-        
         return f"""You are an expert in medical aesthetics product naming standardization.
 Your task is to match clinic items to our master catalog while considering context and industry knowledge.
 
-Available Categories: {categories}
-
-
-For each item, you must respond in valid JSON format with these exact fields:
-- matched_name (string): exact name from master list
-- confidence (number): between 0 and 1
-- reasoning (string): brief explanation of the match
-- alternative_matches (array of strings): other possible matches if confidence < 0.9
-
 Master list examples:
-{self.master_df.head(3).to_string()}"""
+{self.master_df.head(3).to_string()}
+
+Respond with only a JSON object in this exact format:
+{{
+    "matched_name": "exact name from master list",
+    "confidence": 0.XX,
+    "reasoning": "brief explanation"
+}}"""
 
     def create_item_prompt(self, item_name: str, item_type: str, item_category: str) -> str:
-        return f"""Analyze this item and find the best match in our master list:
+        return f"""Find the best match for:
 Item Name: {item_name}
 Type: {item_type}
 Category: {item_category}
 
-Consider industry standard abbreviations, common misspellings, and regional variations.
-Your response MUST be in this exact JSON format:
-{{
-    "matched_name": "exact name from master list",
-    "confidence": 0.95,
-    "reasoning": "brief explanation of why this is a match",
-    "alternative_matches": ["other possible match 1", "other possible match 2"]
-}}"""
+Remember to respond with only a JSON object."""
 
-    def process_llm_response(self, response: str) -> Dict:
+    def extract_json_from_response(self, text: str) -> Dict:
+        """Extract JSON from the response text."""
         try:
-            json_str = response[response.find('{'):response.rfind('}')+1]
-            result = json.loads(json_str)
-            
-            required_fields = ['matched_name', 'confidence', 'reasoning']
-            if not all(field in result for field in required_fields):
-                raise ValueError("Missing required fields in LLM response")
-            return result
-        except (json.JSONDecodeError, ValueError) as e:
-            st.error(f"Error parsing LLM response: {str(e)}\nResponse was: {response}")
-            return {
-                'matched_name': None,
-                'confidence': 0.0,
-                'reasoning': f"Failed to parse LLM response: {str(e)}"
-            }
+            # Find the first { and last } in the text
+            start = text.find('{')
+            end = text.rfind('}') + 1
+            if start != -1 and end != 0:
+                json_str = text[start:end]
+                return json.loads(json_str)
+            raise ValueError("No JSON object found in response")
+        except Exception as e:
+            raise ValueError(f"Failed to parse response: {str(e)}")
 
     def map_item(self, item_name: str, item_type: str, item_category: str) -> Dict:
         cache_key = f"{item_name}|{item_type}|{item_category}"
@@ -174,7 +156,7 @@ Your response MUST be in this exact JSON format:
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4",  # or "gpt-3.5-turbo" if preferred
                 messages=[
                     {"role": "system", "content": self.create_system_prompt()},
                     {"role": "user", "content": self.create_item_prompt(item_name, item_type, item_category)}
@@ -182,18 +164,15 @@ Your response MUST be in this exact JSON format:
                 temperature=0.3
             )
             
-            result = self.process_llm_response(response.choices[0].message.content)
-            
+            # Extract JSON from response text
+            result = self.extract_json_from_response(response.choices[0].message.content)
             result['original_name'] = item_name
-            result['original_type'] = item_type
-            result['original_category'] = item_category
             
             self.mapping_cache[cache_key] = result
-            
             return result
             
         except Exception as e:
-            st.error(f"Error in LLM processing: {str(e)}")
+            st.error(f"Error processing item {item_name}: {str(e)}")
             return {
                 'original_name': item_name,
                 'matched_name': None,
@@ -201,90 +180,145 @@ Your response MUST be in this exact JSON format:
                 'reasoning': f"Error: {str(e)}"
             }
 
+
+
 def main():
-    st.set_page_config(page_title="CPP Europe Item Name Standardization", layout="wide")
+    # Page config
+    st.set_page_config(
+        page_title="CPP Europe Item Name Standardization",
+        layout="wide",
+        initial_sidebar_state="collapsed"
+    )
     
+    # Custom CSS
+    st.markdown("""
+        <style>
+        .main-header {
+            text-align: center;
+            font-size: 2.5rem;
+            font-weight: bold;
+            margin-bottom: 1rem;
+        }
+        .sub-header {
+            text-align: center;
+            color: #666;
+            font-size: 1.2rem;
+            margin-bottom: 2rem;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+    
+    # Headers
     st.markdown('<h1 class="main-header">AI Engine for Item Standardization</h1>', unsafe_allow_html=True)
     st.markdown("""
         <p class="sub-header">
-        Base Input is a curated master list that our LLM is trained on. 
+        Base Input is a curated master list that our LLM is trained on.<br>
         User inputs sample data from transactions (name, type, category) and output is a suggested name 
         for each row with confidence level and reasoning.
         </p>
         """, unsafe_allow_html=True)
     
-    # Load master list from hardcoded string
-    master_df = pd.read_csv(StringIO(MASTER_LIST))  # Fixed StringIO import
+    # Load master list
+    master_df = pd.DataFrame([x.split(',') for x in MASTER_LIST.split('\n')[1:]], 
+                           columns=MASTER_LIST.split('\n')[0].split(','))
     
-    # Show master list preview
-    st.write("Master List Preview:")
-    st.dataframe(master_df.head())
-    
-    # Text area for sample data input
-    st.write("Enter items to standardize (CSV format: Item Name, Item Type, Item Category)")
-    sample_text = st.text_area(
-        "Paste sample data",
-        "C+E Fer,Product,Face Serums\nPhloretin CF (30ml),Product,Face Serum\nHA Int,Product,Face Treatment\nTriple lipid restore,Product,Face Cream\nTLR 242,Product,Moisturizers\nAGE eye,Product,Eye Products\nDisc Defense serum,Product,Pigmentation\nGentle Clean,Product,Face Wash",
-        height=100
+    # Master list preview with column configuration
+    st.markdown("### Master List Preview")
+    st.dataframe(
+        master_df,
+        column_config={
+            "Item Name": st.column_config.TextColumn("Item Name", width="medium"),
+            "Item Type": st.column_config.TextColumn("Type", width="small"),
+            "Item Category": st.column_config.TextColumn("Category", width="small"),
+            "Brand": st.column_config.TextColumn("Brand", width="small")
+        },
+        hide_index=True
     )
     
-    if st.button("Map Items"):
-        with st.spinner("Processing items with GPT-4..."):
-            sample_data = []
-            for line in sample_text.split('\n'):
-                if line.strip():
-                    name, type_, category = [x.strip() for x in line.split(',')]
-                    sample_data.append({
-                        'Item Name': name,
-                        'Item Type': type_,
-                        'Item Category': category
-                    })
-            
-            sample_df = pd.DataFrame(sample_data)
-            mapper = LLMItemMapper(master_df)
-            results = []
-            
-            progress_bar = st.progress(0)
-            for idx, row in enumerate(sample_df.iterrows()):
-                result = mapper.map_item(
-                    row[1]['Item Name'],
-                    row[1]['Item Type'],
-                    row[1]['Item Category']
-                )
-                results.append(result)
-                progress_bar.progress((idx + 1) / len(sample_df))
-            
-            display_df = pd.DataFrame({
-                'Original Name': [r['original_name'] for r in results],
-                'Matched Name': [r['matched_name'] for r in results],
-                'Confidence': [r['confidence'] for r in results],
-                'Reasoning': [r['reasoning'] for r in results]
-            })
-            
-            def get_color(confidence):
-                if confidence >= 0.9:
-                    return 'background-color: #90EE90'
-                elif confidence >= 0.7:
-                    return 'background-color: #FFFFE0'
-                return 'background-color: #FFB6C1'
-            
-            styled_df = display_df.style.apply(
-                lambda x: [get_color(v) if i == 2 else '' for i, v in enumerate(x)], 
-                axis=1
-            ).format({
-                'Confidence': '{:.1%}'
-            })
-            
-            st.dataframe(styled_df)
-            
-            if len(results) > 0:
-                csv = display_df.to_csv(index=False)
-                st.download_button(
-                    label="Download Results CSV",
-                    data=csv,
-                    file_name="mapping_results.csv",
-                    mime="text/csv"
-                )
+    # Input section
+    st.markdown("### Enter Items to Standardize")
+    st.caption("CSV format: Item Name, Item Type, Item Category")
+    sample_text = st.text_area(
+        label="Paste sample data",
+        value="""C+E Fer,Product,Face Serums
+Phloretin CF (30ml),Product,Face Serum
+HA Int,Product,Face Treatment
+Triple lipid restore,Product,Face Cream
+AGE eye,Product,Eye Products
+Disc Defense serum,Product,Pigmentation""",
+        height=200
+    )
+    
+    # Processing
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("Map Items", type="primary", use_container_width=True):
+            with st.spinner("Processing items..."):
+                # Parse input data
+                sample_data = []
+                for line in sample_text.split('\n'):
+                    if line.strip():
+                        try:
+                            name, type_, category = [x.strip() for x in line.split(',')]
+                            sample_data.append({
+                                'Item Name': name,
+                                'Item Type': type_,
+                                'Item Category': category
+                            })
+                        except ValueError:
+                            st.error(f"Invalid line format: {line}")
+                            continue
+                
+                # Process items
+                sample_df = pd.DataFrame(sample_data)
+                mapper = LLMItemMapper(master_df)
+                results = []
+                
+                # Progress tracking
+                progress_bar = st.progress(0)
+                for idx, row in enumerate(sample_df.iterrows()):
+                    result = mapper.map_item(
+                        row[1]['Item Name'],
+                        row[1]['Item Type'],
+                        row[1]['Item Category']
+                    )
+                    results.append(result)
+                    progress_bar.progress((idx + 1) / len(sample_df))
+                
+                # Display results
+                st.markdown("### Results")
+                display_df = pd.DataFrame({
+                    'Original Name': [r['original_name'] for r in results],
+                    'Matched Name': [r['matched_name'] for r in results],
+                    'Confidence': [r['confidence'] for r in results],
+                    'Reasoning': [r['reasoning'] for r in results]
+                })
+                
+                # Style results
+                def get_color(confidence):
+                    if confidence >= 0.9:
+                        return 'background-color: #90EE90'
+                    elif confidence >= 0.7:
+                        return 'background-color: #FFFFE0'
+                    return 'background-color: #FFB6C1'
+                
+                styled_df = display_df.style.apply(
+                    lambda x: [get_color(v) if i == 2 else '' for i, v in enumerate(x)], 
+                    axis=1
+                ).format({
+                    'Confidence': '{:.1%}'
+                })
+                
+                st.dataframe(styled_df, hide_index=True)
+                
+                # Download option
+                if len(results) > 0:
+                    st.download_button(
+                        label="Download Results CSV",
+                        data=display_df.to_csv(index=False),
+                        file_name="mapping_results.csv",
+                        mime="text/csv"
+                    )
 
 if __name__ == "__main__":
     main()
